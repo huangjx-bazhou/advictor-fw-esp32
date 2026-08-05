@@ -5,6 +5,20 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+/// 普通情形
+/// 在芯片上电之前，路由器正常，这时给芯片上电，会先触发WIFI_EVENT_STA_CONNECTED事件，然后触发IP_EVENT_STA_GOT_IP事件，ip_changed=true
+
+/// 黑名单相关
+/// 1.芯片上电之前已被加入黑名单，会先触发WIFI_EVENT_STA_DISCONNECTED事件，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，触发IP_EVENT_STA_LOST_IP事件，reason=WIFI_REASON_AUTH_FAIL
+/// 2.在正常连接的情况下加入黑名单，会先触发WIFI_EVENT_STA_DISCONNECTED事件，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，触发IP_EVENT_STA_LOST_IP事件，reason=WIFI_REASON_CLASS2_FRAME_FROM_NONAUTH_STA
+
+/// DHCP相关
+/// 1.在芯片拿到IP地址之后，路由器关闭DHCP服务器，等租期到期时，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，会触发IP_EVENT_STA_LOST_IP事件。
+/// 2.再次开启路由器的DHCP服务器，芯片会重新获取IP地址，会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
+/// 3.在芯片拿到IP地址之后，路由器修改DHCP服务器地址池，地址池不包括芯片拿到的IP地址，IP地址租期过一半时，芯片会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
+/// 4.芯片上电之前，路由器DHCP的地址池已耗尽，芯片上电后会触发WIFI_EVENT_STA_CONNECTED事件，触发IP_EVENT_STA_LOST_IP事件，这时芯片会有一个默认的IP地址
+///   当路由器DHCP的地址池恢复正常后，芯片会重新获取IP地址，如果获取的IP地址和默认的IP地址不一样，会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
+
 /**
  * @brief WIFI事件处理函数
  */
@@ -15,10 +29,22 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
     esp_wifi_connect();
     break;
   case WIFI_EVENT_STA_CONNECTED:
+    ESP_LOGI(__func__, "connected to ap");
     /// TODO: 通知MCU连接AP成功
     break;
   case WIFI_EVENT_STA_DISCONNECTED:
+    wifi_event_sta_disconnected_t *sta_disconnected_event_data =
+        (wifi_event_sta_disconnected_t *)event_data;
+
+    ESP_LOGI(__func__, "disconnected from ap, reason: %d",
+             sta_disconnected_event_data->reason);
     /// TODO: 通知MCU已断开连接
+
+    /// TODO: 根据sta_disconnected_event_data->reason判断是否需要重连
+    switch (sta_disconnected_event_data->reason) {
+    default:
+      break;
+    }
     break;
   case WIFI_EVENT_STA_STOP:
     break;
@@ -32,20 +58,19 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
  */
 void sta_got_ip_handler(void *arg, esp_event_base_t event_base,
                         int32_t event_id, void *event_data) {
-
-  ip_event_got_ip_t *got_ip_event_data = (ip_event_got_ip_t *)event_data;
   /// TODO: 通知MCU已获取IP地址
 
-  /// 场景1：与AP处于连接状态，IP地址租约到期，DHCP服务端IP地址池发生变化，取得了新的IP地址。
+  ip_event_got_ip_t *got_ip_event_data = (ip_event_got_ip_t *)event_data;
+  ESP_LOGI(__func__, "ip_changed: %d", got_ip_event_data->ip_changed);
 }
 
+/**
+ * @brief STA丢失IP地址事件处理函数
+ */
 void sta_lost_ip_handler(void *arg, esp_event_base_t event_base,
                          int32_t event_id, void *event_data) {
-  ESP_LOGI("sta_lost_ip_handler", "Lost address");
+  ESP_LOGI(__func__, "lost address");
   /// TODO: 通知MCU已丢失IP地址
-
-  /// 场景1：与AP处于连接状态，IP地址租约到期，DHCP服务端关闭。
-  /// 场景2：与AP处于连接状态，IP地址租约到期，DHCP服务端未关闭，但IP地址池已耗尽。
 }
 
 void wifi_init_sta(void) {
