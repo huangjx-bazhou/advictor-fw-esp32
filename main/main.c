@@ -1,5 +1,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_wifi.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
@@ -47,6 +48,16 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
     break;
   case WIFI_EVENT_STA_STOP:
+    break;
+  case WIFI_EVENT_STA_BEACON_OFFSET_UNSTABLE:
+    wifi_event_sta_beacon_offset_unstable_t
+        *sta_beacon_offset_unstable_event_data =
+            (wifi_event_sta_beacon_offset_unstable_t *)event_data;
+    ESP_LOGI(__func__, "unstable sample, beacon success rate: %.4f",
+             sta_beacon_offset_unstable_event_data->beacon_success_rate);
+#if CONFIG_ESP_WIFI_SLP_SAMPLE_BEACON_FEATURE
+    esp_wifi_beacon_offset_sample_beacon();
+#endif
     break;
   default:
     break;
@@ -131,6 +142,19 @@ void app_main(void) {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+
+  // Configure dynamic frequency scaling:
+  // maximum and minimum frequencies are set in sdkconfig,
+  // automatic light sleep is enabled if tickless idle support is enabled.
+#if CONFIG_PM_ENABLE
+  esp_pm_config_t pm_config = {.max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+                               .min_freq_mhz = 48,
+#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
+                               .light_sleep_enable = true
+#endif
+  };
+  ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+#endif // CONFIG_PM_ENABLE
 
   // Initialize default event loop (shared by all components)
   ESP_ERROR_CHECK(esp_event_loop_create_default());

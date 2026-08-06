@@ -1,1 +1,17 @@
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# --- CPU / DFS ---
+CONFIG_PM_ENABLE=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+
+# --- Wi-Fi 省电模式 ---
+# 默认 MIN_MODEM，由应用层动态切换
+
+# --- Beacon Lost 优化 ---
+CONFIG_ESP_WIFI_SLP_BEACON_LOST_OPT=y
+
+# --- Beacon Offset 采样 ---
+CONFIG_ESP_WIFI_SLP_SAMPLE_BEACON_FEATURE=y
