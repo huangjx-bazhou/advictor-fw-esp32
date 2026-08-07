@@ -1,17 +1,70 @@
-CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
-
-# --- CPU / DFS ---
+# --- 启用电源管理组件 ---
+# 如果启用此选项，应用程序将编译时支持电源管理功能。
+# 此选项会带来运行时开销（中断延迟增加、进入空闲状态所需时间更长），
+# 同时也会降低用于计时的 RTOS 节拍和定时器的精度。
+# 如果应用程序使用了电源管理 API，请启用此选项。
 CONFIG_PM_ENABLE=y
 
-# --- FreeRTOS ---
+# --- 将 Light-sleep 相关代码放置在 IRAM（片内 RAM）中 ---
+# 如果启用此选项，约 2.1KB 的 Light-sleep 相关源代码将被放入 IRAM（片内 RAM）中，
+# 并且在 CPU 频率为 160MHz 时，每次进入睡眠前芯片会多睡约 310µs。
+# 此功能适用于对功耗有更低要求、且 IRAM 中有足够空间存放这部分代码的场景。
+CONFIG_PM_SLP_IRAM_OPT=y
+
+# --- 将 RTOS IDLE 相关代码放置在 IRAM（片内 RAM）中 ---
+# 如果启用此选项，约 180 字节的 RTOS_IDLE 相关源代码将被放入 IRAM（片内 RAM）中，
+# 并且在 CPU 频率为 160MHz 时，每次进入睡眠前芯片会多睡约 20µs。
+# 此功能适用于对功耗有更低要求、且 IRAM 中有足够空间存放这部分代码的场景。
+CONFIG_PM_RTOS_IDLE_OPT=n
+
+# --- 芯片休眠时禁用所有 GPIO ---
+# 此功能旨在自动睡眠时禁用所有 GPIO 引脚，以获得更低的功耗模式。
+# 如果启用，芯片在自动睡眠时将禁用所有 GPIO 引脚，从而减少约 200~300 µA 的电流。
+# 如果您希望在芯片睡眠时仍然正常使用某些引脚（例如用作唤醒源），可以调用 gpio_sleep_sel_dis() 在这些引脚上禁用此功能。
+# 您也可以保持此功能开启，并通过调用 gpio_sleep_set_direction() 和 gpio_sleep_set_pull_mode() 来为睡眠状态配置不同的 GPIO 参数。
+CONFIG_PM_SLP_DISABLE_GPIO=y
+
+# --- 在 Light-sleep 期间关闭 CPU ---
+# 如果启用此选项，CPU 将在 Light-sleep 期间断电。
+# ESP 芯片支持在 Light-sleep 前后保存和恢复 CPU 的运行上下文，该功能可为应用提供无缝的 CPU 断电 Light-sleep 体验，用户无感知。
+# 但这会占用一些内部 RAM。在 ESP32-C3 上，启用此选项将消耗 1.68 KB 内部 RAM，并将睡眠电流降低约 100 µA。
+# 在 ESP32-S3 上，启用此选项将消耗 8.58 KB 内部 RAM，并将睡眠电流降低约 650 µA。
+CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP=y
+
+# --- RTOS Tick 频率 ---
+# 设置 FreeRTOS 节拍中断频率，单位为 Hz
 CONFIG_FREERTOS_HZ=1000
+
+# --- 启用 Tickless IDLE 模式 ---
+# 如果启用了电源管理支持，当没有任务需要运行达到一定数量的节拍时，FreeRTOS 能够将系统置入 Light-sleep 模式。
+# 这个节拍数可以通过 FREERTOS_IDLE_TIME_BEFORE_SLEEP 选项来设置。此功能也被称为" Auto Light-sleep（automatic light sleep）"。
+# 请注意，即使没有任务需要运行，使用 esp_timer API 创建的定时器也可能阻止系统进入睡眠模式。
+# 为了避免不必要的唤醒，可以在初始化定时器时将 skip_unhandled_events 选项设为 true。
+# 如果禁用此选项，Auto Light-sleep 支持将被关闭。
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
 
-# --- Wi-Fi 省电模式 ---
-# 默认 MIN_MODEM，由应用层动态切换
+# --- 进入睡眠模式前最小 IDLE Tick 数 ---
+# 如果连续这么多数量的节拍内没有任务需要运行，FreeRTOS 将进入 Light-sleep 模式。
+# 您可以在 esp_pm 组件中启用 PM_PROFILING 功能，并使用 esp_pm_dump_locks() 来查看睡眠状态。
+# 如果被拒绝的睡眠（rejected sleeps）比例过高，请增大此值以提高调度效率。
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
 
-# --- Beacon Lost 优化 ---
+# --- 关闭 MAC 和基带 ---
+# 如果启用此选项，当 PHY（物理层）被禁用时，Wi-Fi 和蓝牙的 MAC（媒体访问控制层）及基带（Baseband）将被断电。
+# 启用此设置可以小幅降低功耗，但会增加 RAM 占用：仅 Wi-Fi 约 4 KB，仅蓝牙约 2 KB，Wi-Fi + 蓝牙同时启用约 5.3 KB。
+CONFIG_ESP_PHY_MAC_BB_PD=y
+
+# --- Beacon 丢失时的 Wi-Fi 睡眠优化 ---
+# 当发生 Beacon 丢失时启用 Wi-Fi 睡眠优化，并在 Wi-Fi 模块检测到 Beacon 丢失时立即进入睡眠模式。
 CONFIG_ESP_WIFI_SLP_BEACON_LOST_OPT=y
 
-# --- Beacon Offset 采样 ---
+# --- 采样 Beacon 以计算 Beacon 偏移量 ---
+# 选中以启用"采样 Beacon 来计算 Beacon 偏移量"的功能。
 CONFIG_ESP_WIFI_SLP_SAMPLE_BEACON_FEATURE=y
+
+# --- WiFi SoftAP 支持 ---
+# 如果禁用此选项，可以将 Wi-Fi 模块编译为不包含 SoftAP 功能，以减小代码体积。
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# --- RTC 时钟源采用内部RC振荡器 ---
+CONFIG_RTC_CLK_SRC_INT_RC=y
