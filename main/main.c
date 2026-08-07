@@ -1,3 +1,4 @@
+#include "esp_clk_tree.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_pm.h"
@@ -147,8 +148,13 @@ void app_main(void) {
   // maximum and minimum frequencies are set in sdkconfig,
   // automatic light sleep is enabled if tickless idle support is enabled.
 #if CONFIG_PM_ENABLE
+
+  uint32_t xtal_hz = 0;
+  esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_XTAL,
+                               ESP_CLK_TREE_SRC_FREQ_PRECISION_EXACT, &xtal_hz);
+
   esp_pm_config_t pm_config = {.max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
-                               .min_freq_mhz = 48,
+                               .min_freq_mhz = xtal_hz / 1000000,
 #if CONFIG_FREERTOS_USE_TICKLESS_IDLE
                                .light_sleep_enable = true
 #endif
