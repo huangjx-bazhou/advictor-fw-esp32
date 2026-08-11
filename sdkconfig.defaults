@@ -5,6 +5,12 @@
 # 如果应用程序使用了电源管理 API，请启用此选项。
 CONFIG_PM_ENABLE=y
 
+# --- 启用启动时的动态频率调整 (DFS) ---
+# 如果启用此选项，启动代码将配置动态频率调整功能。
+# CPU 最大频率将设为 DEFAULT_CPU_FREQ_MHZ 配置项的值，最小频率则设为晶振（XTAL）频率。
+# 如果禁用此选项，动态频率调整功能将不会生效，直到应用程序调用 esp_pm_configure 函数来主动配置它。
+CONFIG_PM_DFS_INIT_AUTO=y
+
 # --- 将 Light-sleep 相关代码放置在 IRAM（片内 RAM）中 ---
 # 如果启用此选项，约 2.1KB 的 Light-sleep 相关源代码将被放入 IRAM（片内 RAM）中，
 # 并且在 CPU 频率为 160MHz 时，每次进入睡眠前芯片会多睡约 310µs。
