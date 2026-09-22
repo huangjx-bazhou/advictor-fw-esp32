@@ -1,25 +1,10 @@
-#include "esp_clk_tree.h"
-#include "esp_event.h"
-#include "esp_log.h"
-#include "esp_pm.h"
-#include "esp_wifi.h"
-#include "freertos/event_groups.h"
-#include "freertos/task.h"
-#include "nvs_flash.h"
-
-/// 普通情形
-/// 在芯片上电之前，路由器正常，这时给芯片上电，会先触发WIFI_EVENT_STA_CONNECTED事件，然后触发IP_EVENT_STA_GOT_IP事件，ip_changed=true
-
-/// 黑名单相关
-/// 1.芯片上电之前已被加入黑名单，会先触发WIFI_EVENT_STA_DISCONNECTED事件，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，触发IP_EVENT_STA_LOST_IP事件，reason=WIFI_REASON_AUTH_FAIL
-/// 2.在正常连接的情况下加入黑名单，会先触发WIFI_EVENT_STA_DISCONNECTED事件，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，触发IP_EVENT_STA_LOST_IP事件，reason=WIFI_REASON_CLASS2_FRAME_FROM_NONAUTH_STA
-
-/// DHCP相关
-/// 1.在芯片拿到IP地址之后，路由器关闭DHCP服务器，等租期到期时，再过ESP_NETIF_IP_LOST_TIMER_INTERVAL秒，会触发IP_EVENT_STA_LOST_IP事件。
-/// 2.再次开启路由器的DHCP服务器，芯片会重新获取IP地址，会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
-/// 3.在芯片拿到IP地址之后，路由器修改DHCP服务器地址池，地址池不包括芯片拿到的IP地址，IP地址租期过一半时，芯片会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
-/// 4.芯片上电之前，路由器DHCP的地址池已耗尽，芯片上电后会触发WIFI_EVENT_STA_CONNECTED事件，触发IP_EVENT_STA_LOST_IP事件，这时芯片会有一个默认的IP地址
-///   当路由器DHCP的地址池恢复正常后，芯片会重新获取IP地址，如果获取的IP地址和默认的IP地址不一样，会触发IP_EVENT_STA_GOT_IP事件，ip_changed=true。
+#include <esp_event.h>
+#include <esp_log.h>
+#include <esp_pm.h>
+#include <esp_wifi.h>
+#include <freertos/event_groups.h>
+#include <freertos/task.h>
+#include <nvs_flash.h>
 
 /**
  * @brief WIFI事件处理函数
@@ -135,15 +120,6 @@ void wifi_init_sta(void) {
 }
 
 void app_main(void) {
-  // Initialize NVS
-  esp_err_t ret = nvs_flash_init();
-  if (ESP_ERR_NVS_NO_FREE_PAGES == ret ||
-      ESP_ERR_NVS_NEW_VERSION_FOUND == ret) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    ret = nvs_flash_init();
-  }
-  ESP_ERROR_CHECK(ret);
-
   // Configure dynamic frequency scaling:
   // maximum and minimum frequencies are set in sdkconfig,
   // automatic light sleep is enabled if tickless idle support is enabled.
@@ -154,6 +130,15 @@ void app_main(void) {
     esp_pm_configure(&pm_config);
   }
 #endif // CONFIG_PM_ENABLE & CONFIG_FREERTOS_USE_TICKLESS_IDLE
+
+  // Initialize NVS
+  esp_err_t ret = nvs_flash_init();
+  if (ESP_ERR_NVS_NO_FREE_PAGES == ret ||
+      ESP_ERR_NVS_NEW_VERSION_FOUND == ret) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    ret = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(ret);
 
   // Initialize default event loop (shared by all components)
   ESP_ERROR_CHECK(esp_event_loop_create_default());
