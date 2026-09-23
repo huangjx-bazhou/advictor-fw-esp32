@@ -74,3 +74,6 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 
 # --- RTC 时钟源采用内部RC振荡器 ---
 CONFIG_RTC_CLK_SRC_INT_RC=y
+
+# --- 支持 WebSocket ---
+CONFIG_HTTPD_WS_SUPPORT=y

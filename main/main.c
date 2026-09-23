@@ -1,10 +1,166 @@
 #include <esp_event.h>
+#include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_pm.h>
 #include <esp_wifi.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
+
+#if !defined(CONFIG_HTTPD_WS_SUPPORT) || !CONFIG_HTTPD_WS_SUPPORT
+#error "CONFIG_HTTPD_WS_SUPPORT must be defined and enabled"
+#endif
+
+/******************************************************************************************************************************
+ *                             WebSocket Server
+ ******************************************************************************************************************************/
+
+/*
+ * Structure holding server handle
+ * and internal socket fd in order
+ * to use out of request send
+ */
+struct async_resp_arg {
+  httpd_handle_t hd;
+  int fd;
+};
+
+/*
+ * async send function, which we put into the httpd work queue
+ */
+static void ws_async_send(void *arg) {
+  static const char *data = "Async data";
+  struct async_resp_arg *resp_arg = arg;
+  httpd_handle_t hd = resp_arg->hd;
+  int fd = resp_arg->fd;
+  httpd_ws_frame_t ws_pkt;
+  memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+  ws_pkt.payload = (uint8_t *)data;
+  ws_pkt.len = strlen(data);
+  ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+  httpd_ws_send_frame_async(hd, fd, &ws_pkt);
+  free(resp_arg);
+}
+
+static void ws_ping_send(void *arg) {
+  struct async_resp_arg *resp_arg = arg;
+  httpd_handle_t hd = resp_arg->hd;
+  int fd = resp_arg->fd;
+  httpd_ws_frame_t ping_pkt;
+  memset(&ping_pkt, 0, sizeof(httpd_ws_frame_t));
+  ping_pkt.type = HTTPD_WS_TYPE_PING;
+  httpd_ws_send_frame_async(hd, fd, &ping_pkt);
+  free(resp_arg);
+}
+
+static esp_err_t trigger_async_send(httpd_handle_t handle, httpd_req_t *req) {
+  struct async_resp_arg *resp_arg = malloc(sizeof(struct async_resp_arg));
+  if (resp_arg == NULL) {
+    return ESP_ERR_NO_MEM;
+  }
+  resp_arg->hd = req->handle;
+  resp_arg->fd = httpd_req_to_sockfd(req);
+  esp_err_t ret = httpd_queue_work(handle, ws_async_send, resp_arg);
+  if (ret != ESP_OK) {
+    free(resp_arg);
+  }
+  return ret;
+}
+
+static esp_err_t trigger_ping_send(httpd_handle_t handle, httpd_req_t *req) {
+  struct async_resp_arg *resp_arg = malloc(sizeof(struct async_resp_arg));
+  if (resp_arg == NULL) {
+    return ESP_ERR_NO_MEM;
+  }
+  resp_arg->hd = req->handle;
+  resp_arg->fd = httpd_req_to_sockfd(req);
+  esp_err_t ret = httpd_queue_work(handle, ws_ping_send, resp_arg);
+  if (ret != ESP_OK) {
+    free(resp_arg);
+  }
+  return ret;
+}
+
+/*
+ * This handler echos back the received ws data
+ * and triggers an async send if certain message received
+ */
+static esp_err_t echo_handler(httpd_req_t *req) {
+  httpd_ws_frame_t ws_pkt;
+  uint8_t *buf = NULL;
+  memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+  ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+  /* Set max_len = 0 to get the frame len */
+  esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+  if (ret != ESP_OK) {
+    ESP_LOGE(__func__, "httpd_ws_recv_frame failed to get frame len with %d",
+             ret);
+    return ret;
+  }
+  ESP_LOGI(__func__, "frame len is %d", ws_pkt.len);
+  if (ws_pkt.len) {
+    /* ws_pkt.len + 1 is for NULL termination as we are expecting a string */
+    buf = calloc(1, ws_pkt.len + 1);
+    if (buf == NULL) {
+      ESP_LOGE(__func__, "Failed to calloc memory for buf");
+      return ESP_ERR_NO_MEM;
+    }
+    ws_pkt.payload = buf;
+    /* Set max_len = ws_pkt.len to get the frame payload */
+    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ret != ESP_OK) {
+      ESP_LOGE(__func__, "httpd_ws_recv_frame failed with %d", ret);
+      free(buf);
+      return ret;
+    }
+    ESP_LOGI(__func__, "Got packet with message: %s", ws_pkt.payload);
+  }
+  ESP_LOGI(__func__, "Packet type: %d", ws_pkt.type);
+  if (ws_pkt.type == HTTPD_WS_TYPE_TEXT && ws_pkt.payload != NULL) {
+    if (strncmp((char *)ws_pkt.payload, "Trigger async",
+                strlen("Trigger async")) == 0) {
+      free(buf);
+      return trigger_async_send(req->handle, req);
+    } else if (strncmp((char *)ws_pkt.payload, "Ping", strlen("Ping")) == 0) {
+      free(buf);
+      return trigger_ping_send(req->handle, req);
+    }
+  }
+
+  ret = httpd_ws_send_frame(req, &ws_pkt);
+  if (ret != ESP_OK) {
+    ESP_LOGE(__func__, "httpd_ws_send_frame failed with %d", ret);
+  }
+  free(buf);
+  return ret;
+}
+
+static const httpd_uri_t ws = {.uri = "/ws",
+                               .method = HTTP_GET,
+                               .handler = echo_handler,
+                               .user_ctx = NULL,
+                               .is_websocket = true};
+
+static void start_websocket_server(void) {
+  httpd_handle_t server = NULL;
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+  // Start the httpd server
+  ESP_LOGI(__func__, "Starting server on port: '%d'", config.server_port);
+  if (ESP_OK != httpd_start(&server, &config)) {
+    ESP_LOGI(__func__, "Error starting server!");
+    return;
+  }
+
+  // Registering the ws handler
+  ESP_LOGI(__func__, "Registering URI handlers");
+  httpd_register_uri_handler(server, &ws);
+}
+
+/******************************************************************************************************************************
+ *                              Wifi Station
+ ******************************************************************************************************************************/
 
 /**
  * @brief WIFI事件处理函数
@@ -55,10 +211,13 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
  */
 void sta_got_ip_handler(void *arg, esp_event_base_t event_base,
                         int32_t event_id, void *event_data) {
-  /// TODO: 通知MCU已获取IP地址
-
   ip_event_got_ip_t *got_ip_event_data = (ip_event_got_ip_t *)event_data;
   ESP_LOGI(__func__, "ip_changed: %d", got_ip_event_data->ip_changed);
+
+  /// TODO: 通过MDNS发布服务
+
+  // 启动 WebSocket 服务器
+  start_websocket_server();
 }
 
 /**
