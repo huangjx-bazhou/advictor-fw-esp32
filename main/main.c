@@ -308,13 +308,13 @@ void app_main(void) {
   // Configure dynamic frequency scaling:
   // maximum and minimum frequencies are set in sdkconfig,
   // automatic light sleep is enabled if tickless idle support is enabled.
-#if CONFIG_PM_ENABLE & CONFIG_FREERTOS_USE_TICKLESS_IDLE
+#if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
   esp_pm_config_t pm_config;
   if (ESP_OK == esp_pm_get_configuration(&pm_config)) {
     pm_config.light_sleep_enable = true;
     esp_pm_configure(&pm_config);
   }
-#endif // CONFIG_PM_ENABLE & CONFIG_FREERTOS_USE_TICKLESS_IDLE
+#endif // CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
 
   // Initialize NVS
   esp_err_t ret = nvs_flash_init();
