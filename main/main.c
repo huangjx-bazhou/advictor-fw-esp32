@@ -8,11 +8,15 @@
 #include <freertos/task.h>
 #include <mdns.h>
 #include <nvs_flash.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #if !defined(CONFIG_HTTPD_WS_SUPPORT) || !CONFIG_HTTPD_WS_SUPPORT
 #error "CONFIG_HTTPD_WS_SUPPORT must be defined and enabled"
 #endif
+
+#define WEBSOCKET_MAX_FRAME_SIZE 4096
 
 /******************************************************************************************************************************
  *                             WebSocket Server
@@ -38,6 +42,10 @@ static void websocket_close_cb(httpd_handle_t hd, int sockfd) {
 }
 
 static esp_err_t websocket_handler(httpd_req_t *req) {
+  if (req->method == HTTP_GET) {
+    return ESP_OK;
+  }
+
   httpd_ws_frame_t ws_pkt;
   memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
 
@@ -49,7 +57,20 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
     return ret;
   }
 
-  ESP_LOGI(__func__, "frame len is %d", ws_pkt.len);
+  ESP_LOGI(__func__, "frame len is %zu", ws_pkt.len);
+
+  if (ws_pkt.len > WEBSOCKET_MAX_FRAME_SIZE) {
+    ESP_LOGW(__func__, "WebSocket frame exceeds %d bytes",
+             WEBSOCKET_MAX_FRAME_SIZE);
+    return ESP_ERR_INVALID_SIZE;
+  }
+
+  if (ws_pkt.type >= HTTPD_WS_TYPE_CLOSE &&
+      (!ws_pkt.final || ws_pkt.len > 125 ||
+       (ws_pkt.type == HTTPD_WS_TYPE_CLOSE && ws_pkt.len == 1))) {
+    ESP_LOGW(__func__, "Invalid WebSocket control frame");
+    return ESP_ERR_INVALID_ARG;
+  }
 
   if (ws_pkt.len > 0) {
     /* ws_pkt.len + 1 is for NULL termination as we are expecting a string */
@@ -68,7 +89,6 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
       free(ws_pkt.payload);
       return ret;
     }
-    ESP_LOGI(__func__, "Got packet with message: %s", ws_pkt.payload);
   }
 
   ESP_LOGI(__func__, "Packet type: %d", ws_pkt.type);
@@ -77,6 +97,8 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
   switch (ws_pkt.type) {
   case HTTPD_WS_TYPE_TEXT:
     ESP_LOGI(__func__, "Received a text frame");
+    ESP_LOGI(__func__, "Got text message: %s",
+             ws_pkt.payload ? (const char *)ws_pkt.payload : "");
     break;
   case HTTPD_WS_TYPE_BINARY:
     ESP_LOGI(__func__, "Received a binary frame");
@@ -95,6 +117,10 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
     break;
   case HTTPD_WS_TYPE_CLOSE:
     ESP_LOGI(__func__, "Received a close frame");
+    ret = httpd_ws_send_frame(req, &ws_pkt);
+    if (ESP_OK != ret) {
+      ESP_LOGW(__func__, "Failed to send close frame with %d", ret);
+    }
     break;
   default:
     ESP_LOGI(__func__, "Received an unknown frame type");
@@ -141,6 +167,7 @@ static void start_websocket_server(void) {
     ESP_LOGW(__func__,
              "Failed to register URI handlers: Code = %d, Message = %s", err,
              esp_err_to_name(err));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(httpd_stop(server));
   }
 }
 
@@ -149,31 +176,34 @@ static void start_websocket_server(void) {
  ******************************************************************************************************************************/
 
 static bool mdns_started = false;
-static bool mdns_http_service_added = false;
 
 static void start_mdns_service(void) {
-  if (!mdns_started) {
-    esp_err_t err = mdns_init();
-    if (ESP_OK != err) {
-      ESP_LOGW(__func__, "Failed to init mdns: Code = %d, Message = %s", err,
-               esp_err_to_name(err));
-      return;
-    }
-    mdns_started = true;
+  if (mdns_started) {
+    return;
   }
 
-  ESP_ERROR_CHECK(mdns_hostname_set("nirs"));
-  ESP_ERROR_CHECK(mdns_instance_name_set("Jhon's ESP32 Thing"));
-
-  if (!mdns_http_service_added) {
-    esp_err_t err = mdns_service_add("nirs-http", "_nirs", "_tcp", 80, NULL, 0);
-    if (ESP_OK != err) {
-      ESP_LOGW(__func__, "Failed to add mdns service: Code = %d, Message = %s",
-               err, esp_err_to_name(err));
-      return;
-    }
-    mdns_http_service_added = true;
+  esp_err_t err = mdns_init();
+  if (ESP_OK != err) {
+    ESP_LOGW(__func__, "Failed to init mdns: Code = %d, Message = %s", err,
+             esp_err_to_name(err));
+    return;
   }
+
+  err = mdns_hostname_set("nirs");
+  if (ESP_OK == err) {
+    err = mdns_instance_name_set("Jhon's ESP32 Thing");
+  }
+  if (ESP_OK == err) {
+    err = mdns_service_add("nirs-http", "_nirs", "_tcp", 80, NULL, 0);
+  }
+  if (ESP_OK != err) {
+    ESP_LOGW(__func__, "Failed to configure mdns: Code = %d, Message = %s", err,
+             esp_err_to_name(err));
+    mdns_free();
+    return;
+  }
+
+  mdns_started = true;
 }
 
 static void stop_mdns_service(void) {
@@ -183,7 +213,6 @@ static void stop_mdns_service(void) {
 
   mdns_free();
   mdns_started = false;
-  mdns_http_service_added = false;
 }
 
 /******************************************************************************************************************************
@@ -197,7 +226,7 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
                         int32_t event_id, void *event_data) {
   switch (event_id) {
   case WIFI_EVENT_STA_START:
-    esp_wifi_connect();
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
     break;
   case WIFI_EVENT_STA_CONNECTED:
     ESP_LOGI(__func__, "connected to ap");
@@ -210,8 +239,8 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(__func__, "disconnected from ap, reason: %d",
              sta_disconnected_event_data->reason);
 
-    esp_wifi_connect();
-    //stop_mdns_service();
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
+    // stop_mdns_service();
     break;
   case WIFI_EVENT_STA_STOP:
     stop_mdns_service();
@@ -223,7 +252,7 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(__func__, "unstable sample, beacon success rate: %.4f",
              sta_beacon_offset_unstable_event_data->beacon_success_rate);
 #if CONFIG_ESP_WIFI_SLP_SAMPLE_BEACON_FEATURE
-    esp_wifi_beacon_offset_sample_beacon();
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_beacon_offset_sample_beacon());
 #endif
     break;
   default:
@@ -310,9 +339,14 @@ void app_main(void) {
   // automatic light sleep is enabled if tickless idle support is enabled.
 #if CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
   esp_pm_config_t pm_config;
-  if (ESP_OK == esp_pm_get_configuration(&pm_config)) {
+  esp_err_t pm_ret = esp_pm_get_configuration(&pm_config);
+  if (ESP_OK == pm_ret) {
     pm_config.light_sleep_enable = true;
-    esp_pm_configure(&pm_config);
+    pm_ret = esp_pm_configure(&pm_config);
+  }
+  if (ESP_OK != pm_ret) {
+    ESP_LOGW(__func__, "Failed to enable automatic light sleep: %s",
+             esp_err_to_name(pm_ret));
   }
 #endif // CONFIG_PM_ENABLE && CONFIG_FREERTOS_USE_TICKLESS_IDLE
 
