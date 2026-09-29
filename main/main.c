@@ -6,6 +6,7 @@
 #include <esp_wifi.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <mdns.h>
 #include <nvs_flash.h>
 #include <unistd.h>
 
@@ -144,6 +145,48 @@ static void start_websocket_server(void) {
 }
 
 /******************************************************************************************************************************
+ *                              mDNS
+ ******************************************************************************************************************************/
+
+static bool mdns_started = false;
+static bool mdns_http_service_added = false;
+
+static void start_mdns_service(void) {
+  if (!mdns_started) {
+    esp_err_t err = mdns_init();
+    if (ESP_OK != err) {
+      ESP_LOGW(__func__, "Failed to init mdns: Code = %d, Message = %s", err,
+               esp_err_to_name(err));
+      return;
+    }
+    mdns_started = true;
+  }
+
+  ESP_ERROR_CHECK(mdns_hostname_set("nirs"));
+  ESP_ERROR_CHECK(mdns_instance_name_set("Jhon's ESP32 Thing"));
+
+  if (!mdns_http_service_added) {
+    esp_err_t err = mdns_service_add("nirs-http", "_nirs", "_tcp", 80, NULL, 0);
+    if (ESP_OK != err) {
+      ESP_LOGW(__func__, "Failed to add mdns service: Code = %d, Message = %s",
+               err, esp_err_to_name(err));
+      return;
+    }
+    mdns_http_service_added = true;
+  }
+}
+
+static void stop_mdns_service(void) {
+  if (!mdns_started) {
+    return;
+  }
+
+  mdns_free();
+  mdns_started = false;
+  mdns_http_service_added = false;
+}
+
+/******************************************************************************************************************************
  *                              Wifi Station
  ******************************************************************************************************************************/
 
@@ -166,15 +209,12 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
     ESP_LOGI(__func__, "disconnected from ap, reason: %d",
              sta_disconnected_event_data->reason);
-    /// TODO: 通知MCU已断开连接
 
-    /// TODO: 根据sta_disconnected_event_data->reason判断是否需要重连
-    switch (sta_disconnected_event_data->reason) {
-    default:
-      break;
-    }
+    esp_wifi_connect();
+    //stop_mdns_service();
     break;
   case WIFI_EVENT_STA_STOP:
+    stop_mdns_service();
     break;
   case WIFI_EVENT_STA_BEACON_OFFSET_UNSTABLE:
     wifi_event_sta_beacon_offset_unstable_t
@@ -199,10 +239,11 @@ void sta_got_ip_handler(void *arg, esp_event_base_t event_base,
   ip_event_got_ip_t *got_ip_event_data = (ip_event_got_ip_t *)event_data;
   ESP_LOGI(__func__, "ip_changed: %d", got_ip_event_data->ip_changed);
 
-  /// TODO: 通过MDNS发布服务
+  // Start the mDNS service
+  start_mdns_service();
 
-  // 启动 WebSocket 服务器
-  start_websocket_server();
+  // Start the WebSocket server
+  // start_websocket_server();
 }
 
 /**
